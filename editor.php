@@ -16,13 +16,14 @@ if($_POST) {
 		err(403,"XSRF Failure");
 }
 
-$file = isset($_REQUEST['file']) ? urldecode($_REQUEST['file']) : '.';
+$file = isset($_REQUEST['file']) && '' != $_REQUEST['file'] ? $_REQUEST['file'] : '.';
+$dontListFiles = array(basename(__FILE__), "js", "css", "fonts", ".htaccess", "robots.txt", "index.html");
 if(isset($_GET['do']) && $_GET['do'] == 'list') {
 	if (is_dir($file)) {
 		$directory = $file;
 		$result = array();
 		$files = array_diff(scandir($directory), array('.','..'));
-	    foreach($files as $entry) if($entry !== basename(__FILE__)) {
+	    foreach($files as $entry) if($directory != '.' || !in_array($entry, $dontListFiles)) {
     		$i = $directory . '/' . $entry;
 	    	$stat = stat($i);
 	        $result[] = array(
@@ -46,6 +47,11 @@ if(isset($_GET['do']) && $_GET['do'] == 'list') {
 	exit;
 } elseif (isset($_POST['do']) && $_POST['do'] == 'delete') {
 	rmrf($file);
+	echo json_encode(array('success' => true));
+	exit;
+} elseif (isset($_POST['do']) && $_POST['do'] == 'touch') {
+	chdir($file);
+	@touch($_POST['name']);
 	echo json_encode(array('success' => true));
 	exit;
 } elseif (isset($_POST['do']) && $_POST['do'] == 'mkdir') {
@@ -84,9 +90,6 @@ if(isset($_GET['do']) && $_GET['do'] == 'list') {
 } elseif (isset($_POST['do']) && $_POST['do'] == 'content') {
 	header('Content-Type: text/plain');
 	echo get_editable_content($file);
-	echo '<textarea id="editable" rows="20" style="height: 100%; box-sizing: border-box;width:100%">';
-	echo htmlentities(file_get_contents($file),ENT_QUOTES,'utf-8');
-	echo '</textarea>';
 	exit;
 } elseif (isset($_POST['do']) && $_POST['do'] == 'content-save') {
 	file_put_contents($file,html_entity_decode($_POST['content']));
@@ -124,15 +127,38 @@ if(isset($_GET['do']) && $_GET['do'] == 'list') {
 	exit;
 }
 function get_editable_content($file) {
-	echo '<style>body{margin-top:30px;}.always-top{position:fixed;top:5px;}</style>';
-	echo '<span class="always-top">';
-	echo '<button id="#save-inside" onclick="';
-	echo 'window.opener.jQuery(window.opener.document).trigger(';
-	echo '\'save.popup\',';
-	echo "['" . htmlentities($file,ENT_QUOTES,'utf-8') . "',";
-	echo 'document.getElementById(\'editable\').value]';
-	echo ');';
-	echo 'window.close();">save</button><button id="#cancel-inside" onclick="window.close();">cancel</button></span>';
+?>
+<!DOCTYPE html><html><head>
+<style>body{margin-top:30px;}.always-top{top:5px;} .codeeditor{font-family: monospace;}</style>
+<link rel="stylesheet" href="css/simplemde.min.css">
+<script src="js/simplemde.min.js"></script>
+</head><body>
+<span class="always-top">
+<button id="#save-inside" onclick="
+window.opener.jQuery(window.opener.document).trigger('save.popup',
+['<?php echo htmlentities($file,ENT_QUOTES,'utf-8')?>',
+//window.opener.jQuery(document.getElementById('editable')).text()]
+simplemde.value()]
+);
+window.close();">save</button><button id="#cancel-inside" onclick="window.close();">cancel</button>
+</span><p>
+<span class="codeeditor"><textarea id="editable" style="height: 400px; box-sizing: border-box; width:600px">
+<?php echo htmlentities(file_get_contents($file),ENT_QUOTES,'utf-8'); ?>
+</textarea></span></p>
+<script>
+var simplemde;
+if ('<?php echo $file ?>'.match(/\.md$/) !== null) {
+  simplemde = new SimpleMDE({ element: document.getElementById('editable'), spellChecker: false });
+} else {
+  simplemde = {
+    value: function() {
+      return document.getElementById('editable').value;
+    }
+  };
+}
+</script>
+</body></html>
+<?php
 }
 function rmrf($dir) {
 	if(is_dir($dir)) {
@@ -169,6 +195,7 @@ $MAX_UPLOAD_SIZE = min(asBytes(ini_get('post_max_size')), asBytes(ini_get('uploa
 ?>
 <!DOCTYPE html>
 <html><head>
+<title>MDeditor</title>
 <meta http-equiv="content-type" content="text/html; charset=utf-8">
 
 <style>
@@ -180,7 +207,7 @@ thead {border-top: 1px solid #82CFFA; border-bottom: 1px solid #96C4EA;border-le
 	border-right: 1px solid #E7F2FB; }
 #top {height:52px;}
 #mkdir {display:inline-block;float:right;padding-top:16px;}
-label { display:block; font-size:11px; color:#555;}
+label.labelblock { display:block; font-size:11px; color:#555;}
 #file_drop_target {width:500px; padding:12px 0; border: 4px dashed #ccc;font-size:12px;color:#ccc;
 	text-align: center;float:right;margin-right:20px;}
 #file_drop_target.drag_over {border: 4px dashed #96C4EA; color: #96C4EA;}
@@ -236,7 +263,7 @@ a.delete {display:inline-block;
 .saved { color: green; display: none; font-weight: bold; }
 td.last { text-align: right; }
 </style>
-<script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+<script src="js/jquery-1.12.3.min.js"></script>
 <script>
 (function($){
 	$.fn.tablesorter = function() {
@@ -364,10 +391,11 @@ $(function(){
 	$(document).on('click.edit', '.edit button', function(event) {
 		var $el = $(this);
 		var $parent = $el.closest('.first');
-		var popup = window.open("","","resizable=1;width=400,height=400");
+		var popup = window.open("","","resizable=1;width=300,height=500");
 		if(popup && popup.document) {
 			$.post("",{'do':'content',file:$el.attr('data-file'),xsrf:XSRF},function(response){
 				popup.document.write(response);
+				popup.document.close();
 			});
 		} else {
 			alert('please enable a popup showing');
@@ -376,9 +404,10 @@ $(function(){
 	});
 	$('#mkdir').submit(function(e) {
 		var hashval = window.location.hash.substr(1),
-			$dir = $(this).find('[name=name]');
+			$dir = $(this).find('[name=name]')
+			$action = $(this).find('input[name=do]:checked');
 		e.preventDefault();
-		$dir.val().length && $.post('?',{'do':'mkdir',name:$dir.val(),xsrf:XSRF,file:hashval},function(data){
+		$dir.val().length && $.post('?',{'do':$action.val(),name:$dir.val(),xsrf:XSRF,file:hashval},function(data){
 			list();
 		},'json');
 		$dir.val('');
@@ -548,8 +577,10 @@ $(function(){
 </head><body>
 <div id="top">
 	<form action="?" method="post" id="mkdir">
-		<label for=dirname>Create New Folder</label><input id=dirname type=text name=name value="" />
-		<input type="submit" value="create" />
+		<label class="labelblock" for=dirname>Create New Folder or Empty File</label><input id=dirname type=text name=name value="" />
+		<input type="submit" value="create" /><br>
+		<input type="radio" id="type_folder" name="do" value="mkdir" checked> <label for="type_folder">Folder</label>
+		<input type="radio" id="type_file" name="do" value="touch"> <label for="type_file">File</label>
 	</form>
 	<div id="file_drop_target">
 		Drag Files Here To Upload
